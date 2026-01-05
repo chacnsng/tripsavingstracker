@@ -8,6 +8,7 @@ CREATE TABLE users (
   email TEXT UNIQUE,
   role TEXT NOT NULL CHECK (role IN ('admin', 'joiner')),
   avatar_color TEXT DEFAULT '#0ea5e9',
+  photo_url TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

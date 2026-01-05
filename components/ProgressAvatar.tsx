@@ -8,6 +8,7 @@ interface ProgressAvatarProps {
     id: string
     name: string
     avatar_color?: string
+    photo_url?: string
   }
   progress: number // 0-100
   currentSavings: number
@@ -69,12 +70,30 @@ export function ProgressAvatar({
       {/* User info header */}
       <div className="flex items-center gap-3 mb-4">
         <div
-          className="flex items-center justify-center w-14 h-14 rounded-full text-white font-bold text-base shadow-lg border-3 border-white dark:border-slate-800 relative ring-2 ring-slate-200 dark:ring-slate-700"
+          className="flex items-center justify-center w-14 h-14 rounded-full text-white font-bold text-base shadow-lg border-3 border-white dark:border-slate-800 relative ring-2 ring-slate-200 dark:ring-slate-700 overflow-hidden"
           style={{ backgroundColor: avatarColor }}
         >
-          {initials}
+          {user.photo_url ? (
+            <img
+              src={user.photo_url}
+              alt={user.name}
+              className="w-full h-full object-cover"
+              onError={(e) => {
+                const target = e.target as HTMLImageElement
+                target.style.display = 'none'
+                const parent = target.parentElement
+                if (parent) {
+                  const fallback = document.createElement('span')
+                  fallback.textContent = initials
+                  parent.appendChild(fallback)
+                }
+              }}
+            />
+          ) : (
+            initials
+          )}
           {hasReachedGoal && (
-            <span className="absolute -top-1 -right-1 bg-gradient-to-br from-amber-400 to-orange-500 text-white text-xs font-bold px-2 py-1 rounded-full shadow-lg animate-pulse flex items-center gap-1">
+            <span className="absolute -top-1 -right-1 bg-gradient-to-br from-amber-400 to-orange-500 text-white text-xs font-bold px-2 py-1 rounded-full shadow-lg animate-pulse flex items-center gap-1 z-10">
               ✈️
             </span>
           )}

@@ -16,6 +16,7 @@ export type User = {
   email?: string
   role: 'admin' | 'joiner'
   avatar_color?: string
+  photo_url?: string
   created_at: string
   updated_at: string
 }

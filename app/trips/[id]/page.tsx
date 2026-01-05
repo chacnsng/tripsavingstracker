@@ -456,17 +456,39 @@ export default function TripDetailPage() {
                       <td className="py-4 px-4">
                         <div className="flex items-center gap-3">
                           <div
-                            className="w-11 h-11 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-md ring-2 ring-slate-200 dark:ring-slate-700"
+                            className="w-11 h-11 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-md ring-2 ring-slate-200 dark:ring-slate-700 overflow-hidden"
                             style={{
                               backgroundColor: member.user.avatar_color || '#0ea5e9',
                             }}
                           >
-                            {member.user.name
-                              .split(' ')
-                              .map(n => n[0])
-                              .join('')
-                              .toUpperCase()
-                              .slice(0, 2)}
+                            {member.user.photo_url ? (
+                              <img
+                                src={member.user.photo_url}
+                                alt={member.user.name}
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                  const target = e.target as HTMLImageElement
+                                  target.style.display = 'none'
+                                  const parent = target.parentElement
+                                  if (parent) {
+                                    const initials = member.user.name
+                                      .split(' ')
+                                      .map(n => n[0])
+                                      .join('')
+                                      .toUpperCase()
+                                      .slice(0, 2)
+                                    parent.textContent = initials
+                                  }
+                                }}
+                              />
+                            ) : (
+                              member.user.name
+                                .split(' ')
+                                .map(n => n[0])
+                                .join('')
+                                .toUpperCase()
+                                .slice(0, 2)
+                            )}
                           </div>
                           <span className="font-semibold text-slate-900 dark:text-slate-100">
                             {member.user.name}

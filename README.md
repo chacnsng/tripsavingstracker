@@ -12,13 +12,14 @@ A gamified web application for tracking group travel savings with full financial
 - 🌙 Dark mode support
 - 📥 CSV export for financial data
 - 📝 Complete savings history logging
+- 📸 User profile photo uploads
 
 ## Tech Stack
 
 - Next.js 14 (App Router)
 - TypeScript
 - Tailwind CSS
-- Supabase (Database & Auth)
+- Supabase (Database, Auth & Storage)
 - Vercel (Deployment)
 
 ## Setup
@@ -41,7 +42,14 @@ npm install
    - This will create all necessary tables, indexes, and policies
    - (Optional) Run `scripts/init-admin.sql` to create your first admin user
 
-3. **Configure environment variables:**
+3. **Set up Storage for User Photos:**
+   - Go to Storage in your Supabase dashboard
+   - Click "New bucket"
+   - Name it `user-photos`
+   - Make it **public** (or set up RLS policies from `supabase/storage_setup.sql`)
+   - Run the SQL from `supabase/storage_setup.sql` in the SQL Editor to set up storage policies
+
+4. **Configure environment variables:**
    - Copy `.env.local.example` to `.env.local`
    - Get your Supabase URL and anon key from your project settings (Settings → API)
    - Update `.env.local` with your credentials:
@@ -50,12 +58,12 @@ NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key_here
 ```
 
-4. **Run development server:**
+5. **Run development server:**
 ```bash
 npm run dev
 ```
 
-5. **Access the application:**
+6. **Access the application:**
    - Open [http://localhost:3000](http://localhost:3000)
    - You'll be redirected to the dashboard
    - If no admin user exists, create one via the Admin Panel
@@ -65,6 +73,7 @@ npm run dev
 ### Admin Features
 - Create and manage trips
 - Create and manage users
+- Upload user profile photos
 - Assign users to trips
 - Update savings amounts for any user
 - Export financial data to CSV
@@ -99,6 +108,7 @@ npm run dev
 
 3. **Post-deployment:**
    - Run the database schema in your Supabase project if you haven't already
+   - Set up the storage bucket for user photos
    - Create your first admin user through the Admin Panel or SQL script
 
 ## Project Structure
@@ -113,11 +123,14 @@ npm run dev
 │   ├── ProgressAvatar.tsx # Gamified progress visualization
 │   ├── CountdownTimer.tsx # Trip countdown
 │   ├── TripCard.tsx       # Trip card component
+│   ├── PhotoUpload.tsx    # Photo upload component
 │   └── ThemeProvider.tsx  # Dark mode provider
 ├── lib/                   # Utilities
-│   └── supabase.ts        # Supabase client & types
+│   ├── supabase.ts        # Supabase client & types
+│   └── storage.ts         # Storage utilities
 ├── supabase/              # Database schema
-│   └── schema.sql         # Complete database schema
+│   ├── schema.sql         # Complete database schema
+│   └── storage_setup.sql  # Storage bucket policies
 └── scripts/               # Setup scripts
     └── init-admin.sql     # Initial admin user script
 ```
@@ -131,13 +144,13 @@ npm run dev
 - Confetti animation when goal is reached
 
 ### Financial Transparency
-- All savings visible to all trip members
-- Complete change history with timestamps
-- CSV export for record-keeping
-- No silent overwrites - all changes logged
+- All users can see individual savings amounts
+- Complete history of all savings updates
+- Admin actions are logged with timestamps
+- CSV export for financial records
 
-### Dark Mode
-- Toggle between light and dark themes
-- Preference saved in localStorage
-- Smooth transitions between themes
-
+### User Profile Photos
+- Upload profile photos directly from the admin panel
+- Photos are stored in Supabase Storage
+- Automatic fallback to colored initials if photo fails to load
+- Support for JPG, PNG, and GIF formats (max 5MB)

@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react'
 import { supabase, User, Trip } from '@/lib/supabase'
 import { DarkModeToggle } from '@/components/DarkModeToggle'
+import { PhotoUpload } from '@/components/PhotoUpload'
+import { uploadUserPhoto, deleteUserPhoto } from '@/lib/storage'
 import Link from 'next/link'
 
 export default function AdminPage() {
@@ -33,7 +35,9 @@ export default function AdminPage() {
     email: '',
     role: 'joiner' as 'admin' | 'joiner',
     avatar_color: '#0ea5e9',
+    photo_url: '',
   })
+  const [pendingPhotoFile, setPendingPhotoFile] = useState<File | null>(null)
 
   // Trip members management
   const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null)
@@ -41,6 +45,18 @@ export default function AdminPage() {
 
   useEffect(() => {
     loadData()
+  }, [])
+
+  useEffect(() => {
+    const handlePhotoFileSelect = (e: Event) => {
+      const customEvent = e as CustomEvent<File>
+      setPendingPhotoFile(customEvent.detail)
+    }
+
+    window.addEventListener('photoFileSelected', handlePhotoFileSelect as EventListener)
+    return () => {
+      window.removeEventListener('photoFileSelected', handlePhotoFileSelect as EventListener)
+    }
   }, [])
 
   const loadData = async () => {
@@ -224,21 +240,45 @@ export default function AdminPage() {
         return
       }
 
-      const { error } = await supabase.from('users').insert({
-        name: userForm.name.trim(),
-        email: userForm.email?.trim() || null,
-        role: userForm.role,
-        avatar_color: userForm.avatar_color,
-      })
+      // First create the user to get the user ID
+      const { data: newUser, error: createError } = await supabase
+        .from('users')
+        .insert({
+          name: userForm.name.trim(),
+          email: userForm.email?.trim() || null,
+          role: userForm.role,
+          avatar_color: userForm.avatar_color,
+          photo_url: userForm.photo_url?.trim() || null,
+        })
+        .select()
+        .single()
 
-      if (error) {
-        console.error('Supabase error:', error)
-        alert(`Failed to create user: ${error.message || JSON.stringify(error)}`)
+      if (createError) {
+        console.error('Supabase error:', createError)
+        alert(`Failed to create user: ${createError.message || JSON.stringify(createError)}`)
         return
       }
 
+      // If there's a pending photo file, upload it now that we have the user ID
+      if (pendingPhotoFile && newUser) {
+        try {
+          const photoUrl = await uploadUserPhoto(pendingPhotoFile, newUser.id)
+          if (photoUrl) {
+            // Update the user with the photo URL
+            await supabase
+              .from('users')
+              .update({ photo_url: photoUrl })
+              .eq('id', newUser.id)
+          }
+        } catch (error) {
+          console.error('Error uploading photo after user creation:', error)
+          // Don't fail the user creation if photo upload fails
+        }
+        setPendingPhotoFile(null)
+      }
+
       setShowUserForm(false)
-      setUserForm({ name: '', email: '', role: 'joiner', avatar_color: '#0ea5e9' })
+      setUserForm({ name: '', email: '', role: 'joiner', avatar_color: '#0ea5e9', photo_url: '' })
       loadData()
     } catch (error: any) {
       console.error('Error creating user:', error)
@@ -250,25 +290,81 @@ export default function AdminPage() {
     if (!editingUser) return
 
     try {
+      if (!userForm.name.trim()) {
+        alert('Please enter a name')
+        return
+      }
+
+      // Handle photo URL - PhotoUpload component handles upload for existing users
+      // For new users, pendingPhotoFile would be set, but for editing, photo_url is already set
+      let photoUrl = userForm.photo_url
+      
+      // If there's a pending photo file (shouldn't happen when editing, but handle it)
+      if (pendingPhotoFile) {
+        // Delete old photo if it exists and is from our storage
+        if (editingUser.photo_url && editingUser.photo_url.includes('supabase.co')) {
+          try {
+            await deleteUserPhoto(editingUser.photo_url)
+          } catch (error) {
+            console.error('Error deleting old photo:', error)
+            // Continue even if deletion fails
+          }
+        }
+        
+        // Upload the new photo
+        try {
+          const uploadedUrl = await uploadUserPhoto(pendingPhotoFile, editingUser.id)
+          if (uploadedUrl) {
+            photoUrl = uploadedUrl
+          } else {
+            throw new Error('Photo upload returned no URL')
+          }
+        } catch (error: any) {
+          console.error('Error uploading photo:', error)
+          alert(`Failed to upload photo: ${error?.message || 'Unknown error'}`)
+          return
+        }
+        setPendingPhotoFile(null)
+      } else if (userForm.photo_url && userForm.photo_url !== editingUser.photo_url) {
+        // Photo was uploaded via PhotoUpload component (photo_url changed)
+        // Delete old photo if it exists and is from our storage
+        if (editingUser.photo_url && editingUser.photo_url.includes('supabase.co')) {
+          try {
+            await deleteUserPhoto(editingUser.photo_url)
+          } catch (error) {
+            console.error('Error deleting old photo:', error)
+            // Continue even if deletion fails
+          }
+        }
+        photoUrl = userForm.photo_url
+      }
+
+      // Update the user
       const { error } = await supabase
         .from('users')
         .update({
-          name: userForm.name,
-          email: userForm.email || null,
+          name: userForm.name.trim(),
+          email: userForm.email?.trim() || null,
           role: userForm.role,
           avatar_color: userForm.avatar_color,
+          photo_url: photoUrl?.trim() || null,
         })
         .eq('id', editingUser.id)
 
-      if (error) throw error
+      if (error) {
+        console.error('Supabase error:', error)
+        alert(`Failed to update user: ${error.message || JSON.stringify(error)}`)
+        return
+      }
 
-      setEditingUser(null)
       setShowUserForm(false)
-      setUserForm({ name: '', email: '', role: 'joiner', avatar_color: '#0ea5e9' })
+      setEditingUser(null)
+      setUserForm({ name: '', email: '', role: 'joiner', avatar_color: '#0ea5e9', photo_url: '' })
+      setPendingPhotoFile(null)
       loadData()
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating user:', error)
-      alert('Failed to update user')
+      alert(`Failed to update user: ${error?.message || 'Unknown error'}`)
     }
   }
 
@@ -294,8 +390,22 @@ export default function AdminPage() {
       email: user.email || '',
       role: user.role,
       avatar_color: user.avatar_color || '#0ea5e9',
+      photo_url: user.photo_url || '',
     })
+    setPendingPhotoFile(null)
     setShowUserForm(true)
+  }
+
+  const handlePhotoUpload = (photoUrl: string | null) => {
+    if (photoUrl) {
+      setUserForm({ ...userForm, photo_url: photoUrl })
+    } else {
+      setUserForm({ ...userForm, photo_url: '' })
+    }
+  }
+
+  const handlePhotoFileSelect = (file: File) => {
+    setPendingPhotoFile(file)
   }
 
   const loadTripMembers = async (tripId: string) => {
@@ -367,22 +477,25 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <header className="bg-white dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-teal-50/20 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900">
+      <header className="bg-white/80 dark:bg-slate-800/80 backdrop-blur-sm shadow-sm border-b border-slate-200/50 dark:border-slate-700/50 sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-4">
               <Link
                 href="/dashboard"
-                className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                aria-label="Back to dashboard"
               >
-                ← Dashboard
+                <svg className="w-5 h-5 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                </svg>
               </Link>
               <div>
-                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+                <h1 className="text-2xl font-bold bg-gradient-to-r from-sky-600 to-teal-600 dark:from-sky-400 dark:to-teal-400 bg-clip-text text-transparent">
                   Admin Panel
                 </h1>
-                <p className="text-sm text-gray-600 dark:text-gray-400">
+                <p className="text-sm text-slate-600 dark:text-slate-400 font-medium">
                   Manage trips, users, and savings
                 </p>
               </div>
@@ -394,24 +507,24 @@ export default function AdminPage() {
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Tabs */}
-        <div className="mb-6 border-b border-gray-200 dark:border-gray-700">
-          <div className="flex gap-4">
+        <div className="mb-8 border-b-2 border-slate-200 dark:border-slate-700">
+          <div className="flex gap-6">
             <button
               onClick={() => setActiveTab('trips')}
-              className={`pb-4 px-2 font-medium transition-colors ${
+              className={`pb-4 px-1 font-semibold text-sm transition-all duration-200 ${
                 activeTab === 'trips'
-                  ? 'text-primary-600 dark:text-primary-400 border-b-2 border-primary-600 dark:border-primary-400'
-                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                  ? 'text-sky-600 dark:text-sky-400 border-b-2 border-sky-600 dark:border-sky-400'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
               }`}
             >
               Trips
             </button>
             <button
               onClick={() => setActiveTab('users')}
-              className={`pb-4 px-2 font-medium transition-colors ${
+              className={`pb-4 px-1 font-semibold text-sm transition-all duration-200 ${
                 activeTab === 'users'
-                  ? 'text-primary-600 dark:text-primary-400 border-b-2 border-primary-600 dark:border-primary-400'
-                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                  ? 'text-sky-600 dark:text-sky-400 border-b-2 border-sky-600 dark:border-sky-400'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
               }`}
             >
               Users
@@ -423,66 +536,87 @@ export default function AdminPage() {
         {activeTab === 'trips' && (
           <div>
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold text-gray-900 dark:text-white">Trips</h2>
+              <div>
+                <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Trips</h2>
+                <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
+                  {trips.length} {trips.length === 1 ? 'trip' : 'trips'} total
+                </p>
+              </div>
               <button
                 onClick={() => {
                   setEditingTrip(null)
-                  setTripForm({ name: '', description: '', target_date: '', target_amount: '' })
+                  setTripForm({ name: '', description: '', target_date: '', target_amount: '', place_description: '', location: '', photos: [] })
+                  setPhotoInput('')
                   setShowTripForm(true)
                 }}
-                className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
+                className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-sky-600 to-teal-600 hover:from-sky-700 hover:to-teal-700 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all duration-200"
               >
-                + Create Trip
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                Create Trip
               </button>
             </div>
 
             {trips.length === 0 ? (
-              <p className="text-gray-600 dark:text-gray-400">No trips yet. Create your first trip!</p>
+              <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-travel-lg p-12 text-center border border-slate-200/50 dark:border-slate-700/50">
+                <svg className="w-16 h-16 mx-auto mb-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <h3 className="text-xl font-bold text-slate-900 dark:text-slate-100 mb-2">No trips yet</h3>
+                <p className="text-slate-600 dark:text-slate-400 mb-6">Create your first trip to get started!</p>
+              </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {trips.map(trip => (
                   <div
                     key={trip.id}
-                    className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 border border-gray-200 dark:border-gray-700"
+                    className="bg-white dark:bg-slate-800 rounded-2xl shadow-travel hover:shadow-travel-lg transition-all duration-300 p-6 border border-slate-200/50 dark:border-slate-700/50"
                   >
-                    <h3 className="font-bold text-lg text-gray-900 dark:text-white mb-2">
+                    <h3 className="font-bold text-xl text-slate-900 dark:text-slate-100 mb-2">
                       {trip.name}
                     </h3>
                     {trip.description && (
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                      <p className="text-sm text-slate-600 dark:text-slate-400 mb-4 line-clamp-2">
                         {trip.description}
                       </p>
                     )}
-                    <div className="space-y-1 text-sm mb-4">
-                      <p className="text-gray-600 dark:text-gray-400">
-                        Target: ${trip.target_amount.toFixed(2)} per person
-                      </p>
-                      <p className="text-gray-600 dark:text-gray-400">
-                        Date: {new Date(trip.target_date).toLocaleDateString()}
-                      </p>
+                    <div className="space-y-2 text-sm mb-5">
+                      <div className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span className="font-semibold">${trip.target_amount.toFixed(2)}</span> per person
+                      </div>
+                      <div className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        <span>{new Date(trip.target_date).toLocaleDateString()}</span>
+                      </div>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       <Link
                         href={`/trips/${trip.id}`}
-                        className="flex-1 px-3 py-2 bg-primary-600 text-white rounded hover:bg-primary-700 text-center text-sm transition-colors"
+                        className="flex-1 px-4 py-2 bg-gradient-to-r from-sky-600 to-teal-600 hover:from-sky-700 hover:to-teal-700 text-white rounded-xl text-center text-sm font-semibold shadow-lg hover:shadow-xl transition-all duration-200"
                       >
                         View
                       </Link>
                       <button
                         onClick={() => handleManageMembers(trip)}
-                        className="px-3 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm transition-colors"
+                        className="px-4 py-2 bg-slate-600 hover:bg-slate-700 text-white rounded-xl text-sm font-semibold shadow-lg hover:shadow-xl transition-all duration-200"
                       >
                         Members
                       </button>
                       <button
                         onClick={() => handleEditTrip(trip)}
-                        className="px-3 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700 text-sm transition-colors"
+                        className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-sm font-semibold shadow-lg hover:shadow-xl transition-all duration-200"
                       >
                         Edit
                       </button>
                       <button
                         onClick={() => handleDeleteTrip(trip.id)}
-                        className="px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700 text-sm transition-colors"
+                        className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold shadow-lg hover:shadow-xl transition-all duration-200"
                       >
                         Delete
                       </button>
@@ -502,7 +636,7 @@ export default function AdminPage() {
               <button
                 onClick={() => {
                   setEditingUser(null)
-                  setUserForm({ name: '', email: '', role: 'joiner', avatar_color: '#0ea5e9' })
+                  setUserForm({ name: '', email: '', role: 'joiner', avatar_color: '#0ea5e9', photo_url: '' })
                   setShowUserForm(true)
                 }}
                 className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
@@ -604,146 +738,187 @@ export default function AdminPage() {
 
         {/* Trip Form Modal */}
         {showTripForm && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-md w-full p-6">
-              <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
-                {editingTrip ? 'Edit Trip' : 'Create Trip'}
-              </h3>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Trip Name *
-                  </label>
-                  <input
-                    type="text"
-                    value={tripForm.name}
-                    onChange={e => setTripForm({ ...tripForm, name: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    placeholder="Summer Vacation 2024"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Description
-                  </label>
-                  <textarea
-                    value={tripForm.description}
-                    onChange={e => setTripForm({ ...tripForm, description: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    rows={3}
-                    placeholder="Optional description..."
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Target Date *
-                  </label>
-                  <input
-                    type="date"
-                    value={tripForm.target_date}
-                    onChange={e => setTripForm({ ...tripForm, target_date: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Target Amount per Person *
-                  </label>
-                  <input
-                    type="number"
-                    value={tripForm.target_amount}
-                    onChange={e => setTripForm({ ...tripForm, target_amount: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    placeholder="1000.00"
-                    step="0.01"
-                    min="0"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Location
-                  </label>
-                  <input
-                    type="text"
-                    value={tripForm.location}
-                    onChange={e => setTripForm({ ...tripForm, location: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    placeholder="e.g., Paris, France"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Place Description
-                  </label>
-                  <textarea
-                    value={tripForm.place_description}
-                    onChange={e => setTripForm({ ...tripForm, place_description: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    rows={3}
-                    placeholder="Describe the destination, what makes it special..."
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Photos (Image URLs)
-                  </label>
-                  <div className="flex gap-2 mb-2">
+          <div 
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                setShowTripForm(false)
+                setEditingTrip(null)
+                setTripForm({ name: '', description: '', target_date: '', target_amount: '', place_description: '', location: '', photos: [] })
+                setPhotoInput('')
+              }
+            }}
+          >
+            <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-2xl w-full my-8 max-h-[90vh] flex flex-col">
+              {/* Header - Sticky */}
+              <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-slate-700 flex-shrink-0">
+                <h3 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                  {editingTrip ? 'Edit Trip' : 'Create New Trip'}
+                </h3>
+                <button
+                  onClick={() => {
+                    setShowTripForm(false)
+                    setEditingTrip(null)
+                    setTripForm({ name: '', description: '', target_date: '', target_amount: '', place_description: '', location: '', photos: [] })
+                    setPhotoInput('')
+                  }}
+                  className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                  aria-label="Close"
+                >
+                  <svg className="w-5 h-5 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              
+              {/* Scrollable Content */}
+              <div className="overflow-y-auto flex-1 p-6">
+                <div className="space-y-5">
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                      Trip Name <span className="text-red-500">*</span>
+                    </label>
                     <input
-                      type="url"
-                      value={photoInput}
-                      onChange={e => setPhotoInput(e.target.value)}
-                      onKeyPress={e => e.key === 'Enter' && handleAddPhoto()}
-                      className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                      placeholder="https://example.com/image.jpg"
+                      type="text"
+                      value={tripForm.name}
+                      onChange={e => setTripForm({ ...tripForm, name: e.target.value })}
+                      className="w-full px-4 py-3 border-2 border-slate-300 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all"
+                      placeholder="Summer Vacation 2024"
                     />
-                    <button
-                      onClick={handleAddPhoto}
-                      className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors text-sm"
-                    >
-                      Add
-                    </button>
                   </div>
-                  {tripForm.photos.length > 0 && (
-                    <div className="space-y-2">
-                      {tripForm.photos.map((photo, index) => (
-                        <div key={index} className="flex items-center gap-2 p-2 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                          <img src={photo} alt={`Photo ${index + 1}`} className="w-12 h-12 object-cover rounded" onError={(e) => {
-                            const target = e.target as HTMLImageElement
-                            target.style.display = 'none'
-                          }} />
-                          <span className="flex-1 text-xs text-gray-600 dark:text-gray-400 truncate">{photo}</span>
-                          <button
-                            onClick={() => handleRemovePhoto(index)}
-                            className="p-1 text-red-600 hover:text-red-700"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        </div>
-                      ))}
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                      Description
+                    </label>
+                    <textarea
+                      value={tripForm.description}
+                      onChange={e => setTripForm({ ...tripForm, description: e.target.value })}
+                      className="w-full px-4 py-3 border-2 border-slate-300 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all resize-none"
+                      rows={3}
+                      placeholder="Optional description..."
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                        Target Date <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="date"
+                        value={tripForm.target_date}
+                        onChange={e => setTripForm({ ...tripForm, target_date: e.target.value })}
+                        className="w-full px-4 py-3 border-2 border-slate-300 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all"
+                      />
                     </div>
-                  )}
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                        Target Amount per Person <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        value={tripForm.target_amount}
+                        onChange={e => setTripForm({ ...tripForm, target_amount: e.target.value })}
+                        className="w-full px-4 py-3 border-2 border-slate-300 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all"
+                        placeholder="1000.00"
+                        step="0.01"
+                        min="0"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                      Location
+                    </label>
+                    <input
+                      type="text"
+                      value={tripForm.location}
+                      onChange={e => setTripForm({ ...tripForm, location: e.target.value })}
+                      className="w-full px-4 py-3 border-2 border-slate-300 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all"
+                      placeholder="e.g., Paris, France"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                      Place Description
+                    </label>
+                    <textarea
+                      value={tripForm.place_description}
+                      onChange={e => setTripForm({ ...tripForm, place_description: e.target.value })}
+                      className="w-full px-4 py-3 border-2 border-slate-300 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all resize-none"
+                      rows={4}
+                      placeholder="Describe the destination, what makes it special..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                      Photos (Image URLs)
+                    </label>
+                    <div className="flex gap-2 mb-3">
+                      <input
+                        type="url"
+                        value={photoInput}
+                        onChange={e => setPhotoInput(e.target.value)}
+                        onKeyPress={e => e.key === 'Enter' && handleAddPhoto()}
+                        className="flex-1 px-4 py-3 border-2 border-slate-300 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all"
+                        placeholder="https://example.com/image.jpg"
+                      />
+                      <button
+                        onClick={handleAddPhoto}
+                        className="px-6 py-3 bg-gradient-to-r from-sky-600 to-teal-600 hover:from-sky-700 hover:to-teal-700 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all duration-200 text-sm"
+                      >
+                        Add
+                      </button>
+                    </div>
+                    {tripForm.photos.length > 0 && (
+                      <div className="space-y-2 max-h-48 overflow-y-auto">
+                        {tripForm.photos.map((photo, index) => (
+                          <div key={index} className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl border border-slate-200 dark:border-slate-600">
+                            <img 
+                              src={photo} 
+                              alt={`Photo ${index + 1}`} 
+                              className="w-16 h-16 object-cover rounded-lg flex-shrink-0" 
+                              onError={(e) => {
+                                const target = e.target as HTMLImageElement
+                                target.style.display = 'none'
+                              }} 
+                            />
+                            <span className="flex-1 text-xs text-slate-600 dark:text-slate-400 truncate font-mono">{photo}</span>
+                            <button
+                              onClick={() => handleRemovePhoto(index)}
+                              className="p-2 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors flex-shrink-0"
+                              aria-label="Remove photo"
+                            >
+                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="flex gap-3 pt-4">
-                  <button
-                    onClick={editingTrip ? handleUpdateTrip : handleCreateTrip}
-                    className="flex-1 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
-                  >
-                    {editingTrip ? 'Update' : 'Create'}
-                  </button>
-                  <button
-                    onClick={() => {
-                      setShowTripForm(false)
-                      setEditingTrip(null)
-                      setTripForm({ name: '', description: '', target_date: '', target_amount: '', place_description: '', location: '', photos: [] })
-                      setPhotoInput('')
-                    }}
-                    className="flex-1 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
+              </div>
+              
+              {/* Footer - Sticky */}
+              <div className="flex gap-3 p-6 border-t border-slate-200 dark:border-slate-700 flex-shrink-0 bg-slate-50 dark:bg-slate-900/50 rounded-b-2xl">
+                <button
+                  onClick={() => {
+                    setShowTripForm(false)
+                    setEditingTrip(null)
+                    setTripForm({ name: '', description: '', target_date: '', target_amount: '', place_description: '', location: '', photos: [] })
+                    setPhotoInput('')
+                  }}
+                  className="flex-1 px-6 py-3 bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-slate-100 rounded-xl font-semibold hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={editingTrip ? handleUpdateTrip : handleCreateTrip}
+                  className="flex-1 px-6 py-3 bg-gradient-to-r from-sky-600 to-teal-600 hover:from-sky-700 hover:to-teal-700 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all duration-200"
+                >
+                  {editingTrip ? 'Update Trip' : 'Create Trip'}
+                </button>
               </div>
             </div>
           </div>
@@ -751,87 +926,132 @@ export default function AdminPage() {
 
         {/* User Form Modal */}
         {showUserForm && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-md w-full p-6">
-              <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
-                {editingUser ? 'Edit User' : 'Create User'}
-              </h3>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Name *
-                  </label>
-                  <input
-                    type="text"
-                    value={userForm.name}
-                    onChange={e => setUserForm({ ...userForm, name: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    placeholder="John Doe"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Email
-                  </label>
-                  <input
-                    type="email"
-                    value={userForm.email}
-                    onChange={e => setUserForm({ ...userForm, email: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    placeholder="john@example.com"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Role *
-                  </label>
-                  <select
-                    value={userForm.role}
-                    onChange={e => setUserForm({ ...userForm, role: e.target.value as 'admin' | 'joiner' })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  >
-                    <option value="joiner">Joiner</option>
-                    <option value="admin">Admin</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Avatar Color
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="color"
-                      value={userForm.avatar_color}
-                      onChange={e => setUserForm({ ...userForm, avatar_color: e.target.value })}
-                      className="w-16 h-10 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer"
-                    />
+          <div 
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                setShowUserForm(false)
+                setEditingUser(null)
+                setUserForm({ name: '', email: '', role: 'joiner', avatar_color: '#0ea5e9', photo_url: '' })
+              }
+            }}
+          >
+            <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-md w-full my-8 max-h-[90vh] flex flex-col">
+              {/* Header - Sticky */}
+              <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-slate-700 flex-shrink-0">
+                <h3 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                  {editingUser ? 'Edit User' : 'Create New User'}
+                </h3>
+                <button
+                  onClick={() => {
+                    setShowUserForm(false)
+                    setEditingUser(null)
+                    setUserForm({ name: '', email: '', role: 'joiner', avatar_color: '#0ea5e9', photo_url: '' })
+                  }}
+                  className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                  aria-label="Close"
+                >
+                  <svg className="w-5 h-5 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              
+              {/* Scrollable Content */}
+              <div className="overflow-y-auto flex-1 p-6">
+                <div className="space-y-5">
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                      Name <span className="text-red-500">*</span>
+                    </label>
                     <input
                       type="text"
-                      value={userForm.avatar_color}
-                      onChange={e => setUserForm({ ...userForm, avatar_color: e.target.value })}
-                      className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                      placeholder="#0ea5e9"
+                      value={userForm.name}
+                      onChange={e => setUserForm({ ...userForm, name: e.target.value })}
+                      className="w-full px-4 py-3 border-2 border-slate-300 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all"
+                      placeholder="John Doe"
                     />
                   </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                      Email
+                    </label>
+                    <input
+                      type="email"
+                      value={userForm.email}
+                      onChange={e => setUserForm({ ...userForm, email: e.target.value })}
+                      className="w-full px-4 py-3 border-2 border-slate-300 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all"
+                      placeholder="john@example.com"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                      Role <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={userForm.role}
+                      onChange={e => setUserForm({ ...userForm, role: e.target.value as 'admin' | 'joiner' })}
+                      className="w-full px-4 py-3 border-2 border-slate-300 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all"
+                    >
+                      <option value="joiner">Joiner</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                      Profile Photo
+                    </label>
+                    <PhotoUpload
+                      userId={editingUser?.id}
+                      currentPhotoUrl={userForm.photo_url || undefined}
+                      onUploadComplete={handlePhotoUpload}
+                      onError={(error) => alert(error)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                      Avatar Color (fallback)
+                    </label>
+                    <div className="flex gap-3">
+                      <input
+                        type="color"
+                        value={userForm.avatar_color}
+                        onChange={e => setUserForm({ ...userForm, avatar_color: e.target.value })}
+                        className="w-20 h-12 border-2 border-slate-300 dark:border-slate-600 rounded-xl cursor-pointer"
+                      />
+                      <input
+                        type="text"
+                        value={userForm.avatar_color}
+                        onChange={e => setUserForm({ ...userForm, avatar_color: e.target.value })}
+                        className="flex-1 px-4 py-3 border-2 border-slate-300 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all font-mono"
+                        placeholder="#0ea5e9"
+                      />
+                    </div>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                      Used if photo URL is not provided or fails to load
+                    </p>
+                  </div>
                 </div>
-                <div className="flex gap-3 pt-4">
-                  <button
-                    onClick={editingUser ? handleUpdateUser : handleCreateUser}
-                    className="flex-1 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
-                  >
-                    {editingUser ? 'Update' : 'Create'}
-                  </button>
-                  <button
-                    onClick={() => {
-                      setShowUserForm(false)
-                      setEditingUser(null)
-                      setUserForm({ name: '', email: '', role: 'joiner', avatar_color: '#0ea5e9' })
-                    }}
-                    className="flex-1 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
+              </div>
+              
+              {/* Footer - Sticky */}
+              <div className="flex gap-3 p-6 border-t border-slate-200 dark:border-slate-700 flex-shrink-0 bg-slate-50 dark:bg-slate-900/50 rounded-b-2xl">
+                <button
+                  onClick={() => {
+                    setShowUserForm(false)
+                    setEditingUser(null)
+                    setUserForm({ name: '', email: '', role: 'joiner', avatar_color: '#0ea5e9', photo_url: '' })
+                  }}
+                  className="flex-1 px-6 py-3 bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-slate-100 rounded-xl font-semibold hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={editingUser ? handleUpdateUser : handleCreateUser}
+                  className="flex-1 px-6 py-3 bg-gradient-to-r from-sky-600 to-teal-600 hover:from-sky-700 hover:to-teal-700 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all duration-200"
+                >
+                  {editingUser ? 'Update User' : 'Create User'}
+                </button>
               </div>
             </div>
           </div>
@@ -839,25 +1059,42 @@ export default function AdminPage() {
 
         {/* Trip Members Modal */}
         {selectedTrip && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-2xl w-full p-6 max-h-[80vh] overflow-y-auto">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-xl font-bold text-gray-900 dark:text-white">
-                  Manage Members: {selectedTrip.name}
-                </h3>
+          <div 
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                setSelectedTrip(null)
+              }
+            }}
+          >
+            <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-2xl w-full my-8 max-h-[90vh] flex flex-col">
+              {/* Header - Sticky */}
+              <div className="flex justify-between items-center p-6 border-b border-slate-200 dark:border-slate-700 flex-shrink-0">
+                <div>
+                  <h3 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                    Manage Members
+                  </h3>
+                  <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
+                    {selectedTrip.name}
+                  </p>
+                </div>
                 <button
                   onClick={() => setSelectedTrip(null)}
-                  className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                  className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                  aria-label="Close"
                 >
-                  ✕
+                  <svg className="w-5 h-5 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
                 </button>
               </div>
-
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Add Member
-                </label>
-                <div className="flex gap-2">
+              
+              {/* Scrollable Content */}
+              <div className="overflow-y-auto flex-1 p-6">
+                <div className="mb-6">
+                  <label className="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">
+                    Add Member
+                  </label>
                   <select
                     onChange={e => {
                       if (e.target.value) {
@@ -865,9 +1102,9 @@ export default function AdminPage() {
                         e.target.value = ''
                       }
                     }}
-                    className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    className="w-full px-4 py-3 border-2 border-slate-300 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all"
                   >
-                    <option value="">Select a user...</option>
+                    <option value="">Select a user to add...</option>
                     {users
                       .filter(
                         u => !tripMembers.some(tm => tm.user_id === u.id)
@@ -879,51 +1116,78 @@ export default function AdminPage() {
                       ))}
                   </select>
                 </div>
-              </div>
 
-              <div className="space-y-2">
-                {tripMembers.length === 0 ? (
-                  <p className="text-gray-600 dark:text-gray-400 text-center py-4">
-                    No members yet. Add members above.
-                  </p>
-                ) : (
-                  tripMembers.map(member => (
-                    <div
-                      key={member.id}
-                      className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div
-                          className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold"
-                          style={{
-                            backgroundColor: member.user.avatar_color || '#0ea5e9',
-                          }}
-                        >
-                          {member.user.name
-                            .split(' ')
-                            .map(n => n[0])
-                            .join('')
-                            .toUpperCase()
-                            .slice(0, 2)}
-                        </div>
-                        <div>
-                          <p className="font-medium text-gray-900 dark:text-white">
-                            {member.user.name}
-                          </p>
-                          <p className="text-sm text-gray-600 dark:text-gray-400">
-                            ${member.current_savings.toFixed(2)} saved
-                          </p>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => handleRemoveMember(member.id)}
-                        className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-sm transition-colors"
-                      >
-                        Remove
-                      </button>
+                <div className="space-y-3">
+                  {tripMembers.length === 0 ? (
+                    <div className="text-center py-8 bg-slate-50 dark:bg-slate-900/50 rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700">
+                      <svg className="w-12 h-12 mx-auto mb-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                      </svg>
+                      <p className="text-slate-600 dark:text-slate-400 font-medium">
+                        No members yet. Add members above.
+                      </p>
                     </div>
-                  ))
-                )}
+                  ) : (
+                    tripMembers.map(member => (
+                      <div
+                        key={member.id}
+                        className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-700 hover:shadow-md transition-all"
+                      >
+                        <div className="flex items-center gap-4">
+                          <div
+                            className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-md ring-2 ring-slate-200 dark:ring-slate-700 overflow-hidden"
+                            style={{
+                              backgroundColor: member.user.avatar_color || '#0ea5e9',
+                            }}
+                          >
+                            {member.user.photo_url ? (
+                              <img
+                                src={member.user.photo_url}
+                                alt={member.user.name}
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                  const target = e.target as HTMLImageElement
+                                  target.style.display = 'none'
+                                  const parent = target.parentElement
+                                  if (parent) {
+                                    const initials = member.user.name
+                                      .split(' ')
+                                      .map(n => n[0])
+                                      .join('')
+                                      .toUpperCase()
+                                      .slice(0, 2)
+                                    parent.textContent = initials
+                                  }
+                                }}
+                              />
+                            ) : (
+                              member.user.name
+                                .split(' ')
+                                .map(n => n[0])
+                                .join('')
+                                .toUpperCase()
+                                .slice(0, 2)
+                            )}
+                          </div>
+                          <div>
+                            <p className="font-semibold text-slate-900 dark:text-slate-100">
+                              {member.user.name}
+                            </p>
+                            <p className="text-sm text-slate-600 dark:text-slate-400 font-medium">
+                              ${member.current_savings.toFixed(2)} saved
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleRemoveMember(member.id)}
+                          className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold shadow-lg hover:shadow-xl transition-all duration-200"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             </div>
           </div>
