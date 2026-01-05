@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { supabase, TripWithMembers } from '@/lib/supabase'
 import { TripCard } from '@/components/TripCard'
 import { DarkModeToggle } from '@/components/DarkModeToggle'
@@ -8,6 +9,7 @@ import { TripCardSkeleton } from '@/components/LoadingSkeleton'
 import Link from 'next/link'
 
 export default function DashboardPage() {
+  const router = useRouter()
   const [trips, setTrips] = useState<TripWithMembers[]>([])
   const [loading, setLoading] = useState(true)
   const [isAdmin, setIsAdmin] = useState(false)
@@ -19,19 +21,32 @@ export default function DashboardPage() {
 
   const loadDashboard = async () => {
     try {
-      // For demo: Get first admin user or create one
-      const { data: users } = await supabase
-        .from('users')
-        .select('*')
-        .eq('role', 'admin')
-        .limit(1)
-
-      if (users && users.length > 0) {
-        setCurrentUser(users[0])
-        setIsAdmin(users[0].role === 'admin')
+      // Check if user is authenticated
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session) {
+        // Not authenticated, redirect to login
+        router.push('/auth/login')
+        return
       }
 
-      // Load trips with members
+      // Get current user profile
+      const { data: userProfile } = await supabase
+        .from('users')
+        .select('*')
+        .eq('auth_user_id', session.user.id)
+        .single()
+
+      if (userProfile) {
+        setCurrentUser(userProfile)
+        setIsAdmin(userProfile.is_owner || userProfile.role === 'admin')
+      } else {
+        // User profile not found, redirect to login
+        router.push('/auth/login')
+        return
+      }
+
+      // Load only trips created by the current user
       const { data: tripsData, error: tripsError } = await supabase
         .from('trips')
         .select(`
@@ -41,6 +56,7 @@ export default function DashboardPage() {
             user:users (*)
           )
         `)
+        .eq('created_by', userProfile.id)
         .order('target_date', { ascending: true })
 
       if (tripsError) throw tripsError
@@ -97,13 +113,38 @@ export default function DashboardPage() {
               </div>
             </div>
             <div className="flex items-center gap-3">
-              {isAdmin && (
-                <Link
-                  href="/admin"
-                  className="px-4 py-2 bg-gradient-to-r from-sky-600 to-teal-600 hover:from-sky-700 hover:to-teal-700 text-white rounded-xl font-medium shadow-lg hover:shadow-xl transition-all duration-200 text-sm"
+              {currentUser && (
+                <span className="text-sm text-slate-600 dark:text-slate-400">
+                  {currentUser.name}
+                </span>
+              )}
+              <button
+                onClick={async () => {
+                  // Check if user is authenticated
+                  const { data: { session } } = await supabase.auth.getSession()
+                  
+                  if (session) {
+                    // User is authenticated, go to create trip page (admin panel)
+                    router.push('/admin')
+                  } else {
+                    // User is not authenticated, redirect to login
+                    router.push('/auth/login')
+                  }
+                }}
+                className="px-4 py-2 bg-gradient-to-r from-sky-600 to-teal-600 hover:from-sky-700 hover:to-teal-700 text-white rounded-xl font-medium shadow-lg hover:shadow-xl transition-all duration-200 text-sm"
+              >
+                Create Trip
+              </button>
+              {currentUser && (
+                <button
+                  onClick={async () => {
+                    await supabase.auth.signOut()
+                    router.push('/auth/login')
+                  }}
+                  className="px-4 py-2 bg-slate-600 hover:bg-slate-700 text-white rounded-xl font-medium shadow-md hover:shadow-lg transition-colors text-sm"
                 >
-                  Admin Panel
-                </Link>
+                  Logout
+                </button>
               )}
               <DarkModeToggle />
             </div>

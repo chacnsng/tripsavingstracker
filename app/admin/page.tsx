@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { supabase, User, Trip } from '@/lib/supabase'
 import { DarkModeToggle } from '@/components/DarkModeToggle'
 import { PhotoUpload } from '@/components/PhotoUpload'
@@ -8,6 +9,7 @@ import { uploadUserPhoto, deleteUserPhoto } from '@/lib/storage'
 import Link from 'next/link'
 
 export default function AdminPage() {
+  const router = useRouter()
   const [users, setUsers] = useState<User[]>([])
   const [trips, setTrips] = useState<Trip[]>([])
   const [loading, setLoading] = useState(true)
@@ -44,8 +46,22 @@ export default function AdminPage() {
   const [tripMembers, setTripMembers] = useState<any[]>([])
 
   useEffect(() => {
-    loadData()
+    checkAuthAndLoadData()
   }, [])
+
+  const checkAuthAndLoadData = async () => {
+    // Check if user is authenticated
+    const { data: { session } } = await supabase.auth.getSession()
+    
+    if (!session) {
+      // Not authenticated, redirect to login
+      router.push('/auth/login')
+      return
+    }
+    
+    // User is authenticated, load data
+    loadData(session.user.id)
+  }
 
   useEffect(() => {
     const handlePhotoFileSelect = (e: Event) => {
@@ -59,15 +75,52 @@ export default function AdminPage() {
     }
   }, [])
 
-  const loadData = async () => {
+  const loadData = async (authUserId?: string) => {
     try {
-      const [usersRes, tripsRes] = await Promise.all([
-        supabase.from('users').select('*').order('created_at', { ascending: false }),
-        supabase.from('trips').select('*').order('target_date', { ascending: true }),
-      ])
+      // Get auth user ID if not provided
+      if (!authUserId) {
+        const { data: { session } } = await supabase.auth.getSession()
+        if (!session) {
+          setLoading(false)
+          return
+        }
+        authUserId = session.user.id
+      }
 
-      if (usersRes.data) setUsers(usersRes.data)
-      if (tripsRes.data) setTrips(tripsRes.data)
+      // Get current user profile
+      const { data: currentUser } = await supabase
+        .from('users')
+        .select('id')
+        .eq('auth_user_id', authUserId)
+        .single()
+
+      if (!currentUser) {
+        console.error('User profile not found')
+        setLoading(false)
+        return
+      }
+
+      // Load only trips created by the current user
+      const { data: tripsData, error: tripsError } = await supabase
+        .from('trips')
+        .select('*')
+        .eq('created_by', currentUser.id)
+        .order('target_date', { ascending: true })
+
+      if (tripsError) throw tripsError
+      if (tripsData) setTrips(tripsData)
+
+      // Load users - only show users created by the current account owner
+      const { data: allUsers } = await supabase
+        .from('users')
+        .select('*')
+        .eq('owner_id', currentUser.id)
+        .order('created_at', { ascending: false })
+
+      if (allUsers) {
+        // Show only users owned by the current account
+        setUsers(allUsers)
+      }
     } catch (error) {
       console.error('Error loading data:', error)
     } finally {
@@ -90,11 +143,19 @@ export default function AdminPage() {
         return
       }
 
+      // Get current authenticated user
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session) {
+        alert('You must be logged in to create trips')
+        return
+      }
+
+      // Get user profile
       const { data: adminUser } = await supabase
         .from('users')
         .select('id')
-        .eq('role', 'admin')
-        .limit(1)
+        .eq('auth_user_id', session.user.id)
         .single()
 
       // Ensure photos is properly formatted as JSONB
@@ -118,8 +179,8 @@ export default function AdminPage() {
       }
 
       setShowTripForm(false)
-      setTripForm({ name: '', description: '', target_date: '', target_amount: '' })
-      loadData()
+      setTripForm({ name: '', description: '', target_date: '', target_amount: '', place_description: '', location: '', photos: [] })
+      if (session) loadData(session.user.id)
     } catch (error: any) {
       console.error('Error creating trip:', error)
       alert(`Failed to create trip: ${error?.message || 'Unknown error'}`)
@@ -169,7 +230,8 @@ export default function AdminPage() {
       setShowTripForm(false)
       setTripForm({ name: '', description: '', target_date: '', target_amount: '', place_description: '', location: '', photos: [] })
       setPhotoInput('')
-      loadData()
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session) loadData(session.user.id)
     } catch (error: any) {
       console.error('Error updating trip:', error)
       alert(`Failed to update trip: ${error?.message || 'Unknown error'}`)
@@ -184,7 +246,8 @@ export default function AdminPage() {
     try {
       const { error } = await supabase.from('trips').delete().eq('id', tripId)
       if (error) throw error
-      loadData()
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session) loadData(session.user.id)
     } catch (error) {
       console.error('Error deleting trip:', error)
       alert('Failed to delete trip')
@@ -240,6 +303,38 @@ export default function AdminPage() {
         return
       }
 
+      // Check if email already exists (if email is provided)
+      if (userForm.email?.trim()) {
+        const { data: existingUser } = await supabase
+          .from('users')
+          .select('id')
+          .eq('email', userForm.email.trim())
+          .single()
+
+        if (existingUser) {
+          alert('A user with this email already exists. Please use a different email or leave it empty.')
+          return
+        }
+      }
+
+      // Get current user to set as owner
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        alert('You must be logged in to create users')
+        return
+      }
+
+      const { data: currentUser } = await supabase
+        .from('users')
+        .select('id')
+        .eq('auth_user_id', session.user.id)
+        .single()
+
+      if (!currentUser) {
+        alert('User profile not found')
+        return
+      }
+
       // First create the user to get the user ID
       const { data: newUser, error: createError } = await supabase
         .from('users')
@@ -249,13 +344,28 @@ export default function AdminPage() {
           role: userForm.role,
           avatar_color: userForm.avatar_color,
           photo_url: userForm.photo_url?.trim() || null,
+          owner_id: currentUser.id, // Set the current user as the owner
         })
         .select()
         .single()
 
       if (createError) {
         console.error('Supabase error:', createError)
-        alert(`Failed to create user: ${createError.message || JSON.stringify(createError)}`)
+        let errorMessage = createError.message || 'Unknown error'
+        
+        // Provide more helpful error messages
+        if (errorMessage.includes('duplicate') || errorMessage.includes('unique')) {
+          errorMessage = 'A user with this email already exists. Please use a different email.'
+        } else if (errorMessage.includes('violates row-level security')) {
+          errorMessage = 'Permission denied. Please make sure you are logged in and have the correct permissions.'
+        }
+        
+        alert(`Failed to create user: ${errorMessage}`)
+        return
+      }
+
+      if (!newUser) {
+        alert('Failed to create user: No user data returned')
         return
       }
 
@@ -279,7 +389,7 @@ export default function AdminPage() {
 
       setShowUserForm(false)
       setUserForm({ name: '', email: '', role: 'joiner', avatar_color: '#0ea5e9', photo_url: '' })
-      loadData()
+      if (session) loadData(session.user.id)
     } catch (error: any) {
       console.error('Error creating user:', error)
       alert(`Failed to create user: ${error?.message || 'Unknown error'}`)
@@ -361,7 +471,8 @@ export default function AdminPage() {
       setEditingUser(null)
       setUserForm({ name: '', email: '', role: 'joiner', avatar_color: '#0ea5e9', photo_url: '' })
       setPendingPhotoFile(null)
-      loadData()
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session) loadData(session.user.id)
     } catch (error: any) {
       console.error('Error updating user:', error)
       alert(`Failed to update user: ${error?.message || 'Unknown error'}`)
@@ -376,7 +487,8 @@ export default function AdminPage() {
     try {
       const { error } = await supabase.from('users').delete().eq('id', userId)
       if (error) throw error
-      loadData()
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session) loadData(session.user.id)
     } catch (error) {
       console.error('Error deleting user:', error)
       alert('Failed to delete user')
@@ -493,14 +605,25 @@ export default function AdminPage() {
               </Link>
               <div>
                 <h1 className="text-2xl font-bold bg-gradient-to-r from-sky-600 to-teal-600 dark:from-sky-400 dark:to-teal-400 bg-clip-text text-transparent">
-                  Admin Panel
+                  Create Trip
                 </h1>
                 <p className="text-sm text-slate-600 dark:text-slate-400 font-medium">
                   Manage trips, users, and savings
                 </p>
               </div>
             </div>
-            <DarkModeToggle />
+            <div className="flex items-center gap-3">
+              <button
+                onClick={async () => {
+                  await supabase.auth.signOut()
+                  router.push('/dashboard')
+                }}
+                className="px-4 py-2 bg-slate-600 hover:bg-slate-700 text-white rounded-xl font-medium shadow-md hover:shadow-lg transition-colors text-sm"
+              >
+                Logout
+              </button>
+              <DarkModeToggle />
+            </div>
           </div>
         </div>
       </header>
