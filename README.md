@@ -144,13 +144,13 @@ npm run dev
 - Confetti animation when goal is reached
 
 ### Financial Transparency
-- All users can see individual savings amounts
-- Complete history of all savings updates
-- Admin actions are logged with timestamps
-- CSV export for financial records
+- All savings visible to all trip members
+- Complete change history with timestamps
+- CSV export for record-keeping
+- No silent overwrites - all changes logged
 
-### User Profile Photos
-- Upload profile photos directly from the admin panel
-- Photos are stored in Supabase Storage
-- Automatic fallback to colored initials if photo fails to load
-- Support for JPG, PNG, and GIF formats (max 5MB)
+### Dark Mode
+- Toggle between light and dark themes
+- Preference saved in localStorage
+- Smooth transitions between themes
+
