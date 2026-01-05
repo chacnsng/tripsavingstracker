@@ -19,7 +19,11 @@ export default function AdminPage() {
     description: '',
     target_date: '',
     target_amount: '',
+    place_description: '',
+    location: '',
+    photos: [] as string[],
   })
+  const [photoInput, setPhotoInput] = useState('')
 
   // User form state
   const [showUserForm, setShowUserForm] = useState(false)
@@ -77,11 +81,17 @@ export default function AdminPage() {
         .limit(1)
         .single()
 
+      // Ensure photos is properly formatted as JSONB
+      const photosData = tripForm.photos.length > 0 ? tripForm.photos : null
+
       const { error } = await supabase.from('trips').insert({
         name: tripForm.name.trim(),
         description: tripForm.description?.trim() || null,
         target_date: tripForm.target_date,
         target_amount: parseFloat(tripForm.target_amount),
+        place_description: tripForm.place_description?.trim() || null,
+        location: tripForm.location?.trim() || null,
+        photos: photosData,
         created_by: adminUser?.id || null,
       })
 
@@ -104,25 +114,49 @@ export default function AdminPage() {
     if (!editingTrip) return
 
     try {
+      if (!tripForm.name.trim()) {
+        alert('Please enter a trip name')
+        return
+      }
+      if (!tripForm.target_date) {
+        alert('Please select a target date')
+        return
+      }
+      if (!tripForm.target_amount || parseFloat(tripForm.target_amount) <= 0) {
+        alert('Please enter a valid target amount')
+        return
+      }
+
+      // Ensure photos is properly formatted as JSONB
+      const photosData = tripForm.photos.length > 0 ? tripForm.photos : null
+
       const { error } = await supabase
         .from('trips')
         .update({
-          name: tripForm.name,
-          description: tripForm.description || null,
+          name: tripForm.name.trim(),
+          description: tripForm.description?.trim() || null,
           target_date: tripForm.target_date,
           target_amount: parseFloat(tripForm.target_amount),
+          place_description: tripForm.place_description?.trim() || null,
+          location: tripForm.location?.trim() || null,
+          photos: photosData,
         })
         .eq('id', editingTrip.id)
 
-      if (error) throw error
+      if (error) {
+        console.error('Supabase error:', error)
+        alert(`Failed to update trip: ${error.message || JSON.stringify(error)}`)
+        return
+      }
 
       setEditingTrip(null)
       setShowTripForm(false)
-      setTripForm({ name: '', description: '', target_date: '', target_amount: '' })
+      setTripForm({ name: '', description: '', target_date: '', target_amount: '', place_description: '', location: '', photos: [] })
+      setPhotoInput('')
       loadData()
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating trip:', error)
-      alert('Failed to update trip')
+      alert(`Failed to update trip: ${error?.message || 'Unknown error'}`)
     }
   }
 
@@ -143,13 +177,44 @@ export default function AdminPage() {
 
   const handleEditTrip = (trip: Trip) => {
     setEditingTrip(trip)
+    let photos: string[] = []
+    if (trip.photos) {
+      if (Array.isArray(trip.photos)) {
+        photos = trip.photos
+      } else if (typeof trip.photos === 'string') {
+        try {
+          photos = JSON.parse(trip.photos)
+        } catch {
+          photos = []
+        }
+      }
+    }
     setTripForm({
       name: trip.name,
       description: trip.description || '',
       target_date: trip.target_date,
       target_amount: trip.target_amount.toString(),
+      place_description: trip.place_description || '',
+      location: trip.location || '',
+      photos: photos,
     })
+    setPhotoInput('')
     setShowTripForm(true)
+  }
+
+  const handleAddPhoto = () => {
+    const url = photoInput.trim()
+    if (url && !tripForm.photos.includes(url)) {
+      setTripForm({ ...tripForm, photos: [...tripForm.photos, url] })
+      setPhotoInput('')
+    }
+  }
+
+  const handleRemovePhoto = (index: number) => {
+    setTripForm({
+      ...tripForm,
+      photos: tripForm.photos.filter((_, i) => i !== index),
+    })
   }
 
   const handleCreateUser = async () => {
@@ -594,6 +659,72 @@ export default function AdminPage() {
                     min="0"
                   />
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Location
+                  </label>
+                  <input
+                    type="text"
+                    value={tripForm.location}
+                    onChange={e => setTripForm({ ...tripForm, location: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="e.g., Paris, France"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Place Description
+                  </label>
+                  <textarea
+                    value={tripForm.place_description}
+                    onChange={e => setTripForm({ ...tripForm, place_description: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    rows={3}
+                    placeholder="Describe the destination, what makes it special..."
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Photos (Image URLs)
+                  </label>
+                  <div className="flex gap-2 mb-2">
+                    <input
+                      type="url"
+                      value={photoInput}
+                      onChange={e => setPhotoInput(e.target.value)}
+                      onKeyPress={e => e.key === 'Enter' && handleAddPhoto()}
+                      className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                      placeholder="https://example.com/image.jpg"
+                    />
+                    <button
+                      onClick={handleAddPhoto}
+                      className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors text-sm"
+                    >
+                      Add
+                    </button>
+                  </div>
+                  {tripForm.photos.length > 0 && (
+                    <div className="space-y-2">
+                      {tripForm.photos.map((photo, index) => (
+                        <div key={index} className="flex items-center gap-2 p-2 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                          <img src={photo} alt={`Photo ${index + 1}`} className="w-12 h-12 object-cover rounded" onError={(e) => {
+                            const target = e.target as HTMLImageElement
+                            target.style.display = 'none'
+                          }} />
+                          <span className="flex-1 text-xs text-gray-600 dark:text-gray-400 truncate">{photo}</span>
+                          <button
+                            onClick={() => handleRemovePhoto(index)}
+                            className="p-1 text-red-600 hover:text-red-700"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <div className="flex gap-3 pt-4">
                   <button
                     onClick={editingTrip ? handleUpdateTrip : handleCreateTrip}
@@ -605,7 +736,8 @@ export default function AdminPage() {
                     onClick={() => {
                       setShowTripForm(false)
                       setEditingTrip(null)
-                      setTripForm({ name: '', description: '', target_date: '', target_amount: '' })
+                      setTripForm({ name: '', description: '', target_date: '', target_amount: '', place_description: '', location: '', photos: [] })
+                      setPhotoInput('')
                     }}
                     className="flex-1 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
                   >

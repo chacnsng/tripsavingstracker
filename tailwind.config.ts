@@ -35,6 +35,7 @@ const config: Config = {
         'pulse-slow': 'pulse 3s infinite',
         'slide-up': 'slideUp 0.3s ease-out',
         'fade-in': 'fadeIn 0.2s ease-in',
+        'ping-slow': 'ping 2s cubic-bezier(0, 0, 0.2, 1) infinite',
       },
       keyframes: {
         slideUp: {

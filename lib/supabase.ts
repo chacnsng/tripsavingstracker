@@ -27,6 +27,9 @@ export type Trip = {
   target_date: string
   target_amount: number
   created_by?: string
+  place_description?: string
+  location?: string
+  photos?: string[]
   created_at: string
   updated_at: string
 }

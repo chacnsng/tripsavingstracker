@@ -40,13 +40,43 @@ export default function TripDetailPage() {
 
       if (tripError) throw tripError
 
+      // Parse photos if it's a string (JSON) or JSONB
+      let photos: string[] = []
+      if (tripData.photos) {
+        if (typeof tripData.photos === 'string') {
+          try {
+            photos = JSON.parse(tripData.photos)
+          } catch {
+            photos = []
+          }
+        } else if (Array.isArray(tripData.photos)) {
+          photos = tripData.photos
+        } else if (typeof tripData.photos === 'object') {
+          // Handle JSONB object
+          photos = Array.isArray(tripData.photos) ? tripData.photos : []
+        }
+      }
+
       const tripWithMembers: TripWithMembers = {
         ...tripData,
+        photos: photos || [],
+        place_description: tripData.place_description || undefined,
+        location: tripData.location || undefined,
         members: (tripData.trip_members || []).map((tm: any) => ({
           ...tm,
           user: tm.user,
         })),
       }
+
+      // Debug: Log trip data to verify it's loading correctly
+      console.log('Trip loaded:', {
+        photos: tripWithMembers.photos,
+        place_description: tripWithMembers.place_description,
+        location: tripWithMembers.location,
+        hasPhotos: tripWithMembers.photos && tripWithMembers.photos.length > 0,
+        hasDescription: tripWithMembers.place_description && tripWithMembers.place_description.trim().length > 0,
+        hasLocation: tripWithMembers.location && tripWithMembers.location.trim().length > 0,
+      })
 
       setTrip(tripWithMembers)
 
@@ -268,7 +298,34 @@ export default function TripDetailPage() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 relative">
+        {/* Floating Folder Button */}
+        {((trip.photos && Array.isArray(trip.photos) && trip.photos.length > 0) || 
+          (trip.place_description && trip.place_description.trim().length > 0) || 
+          (trip.location && trip.location.trim().length > 0)) && (
+          <div className="fixed bottom-8 right-8 z-50 animate-fade-in">
+            <Link
+              href={`/trips/${trip.id}/photos`}
+              className="group relative flex items-center gap-3 px-5 py-4 bg-gradient-to-r from-sky-600 to-teal-600 hover:from-sky-700 hover:to-teal-700 text-white rounded-2xl shadow-2xl hover:shadow-3xl transition-all duration-300 hover:scale-105 backdrop-blur-sm border border-white/20"
+              aria-label="View destination photos and details"
+            >
+              <div className="flex items-center gap-3">
+                <svg className="w-6 h-6 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                </svg>
+                <span className="font-semibold text-sm hidden sm:block">View Destination</span>
+              </div>
+              {trip.photos && Array.isArray(trip.photos) && trip.photos.length > 0 && (
+                <span className="absolute -top-2 -right-2 bg-emerald-500 text-white text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center shadow-lg border-2 border-white">
+                  {trip.photos.length}
+                </span>
+              )}
+              {/* Pulse animation */}
+              <span className="absolute inset-0 bg-white/20 rounded-2xl animate-ping opacity-75"></span>
+            </Link>
+          </div>
+        )}
+
         {/* Hero Section with Countdown */}
         <div className="bg-gradient-to-br from-sky-500 via-blue-500 to-teal-500 rounded-2xl shadow-travel-lg p-8 mb-8 text-white relative overflow-hidden">
           <div className="absolute inset-0 bg-black/10" />
