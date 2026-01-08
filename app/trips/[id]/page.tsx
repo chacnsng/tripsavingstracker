@@ -708,8 +708,8 @@ export default function TripDetailPage() {
           </div>
         </div>
 
-        {/* Savings History (Admin only) */}
-        {isAdmin && !isShareLinkAccess && savingsLogs.length > 0 && (
+        {/* Savings History */}
+        {((isAdmin && !isShareLinkAccess) || isShareLinkAccess) && savingsLogs.length > 0 && (
           <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-travel-lg p-6 mt-8 border border-slate-200/50 dark:border-slate-700/50">
             <div className="mb-6">
               <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-1">
