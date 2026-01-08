@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { supabase, TripWithMembers } from '@/lib/supabase'
 import { DarkModeToggle } from '@/components/DarkModeToggle'
 import Link from 'next/link'
@@ -9,15 +9,46 @@ import Link from 'next/link'
 export default function TripPhotosPage() {
   const params = useParams()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [trip, setTrip] = useState<TripWithMembers | null>(null)
   const [loading, setLoading] = useState(true)
   const [selectedImage, setSelectedImage] = useState<string | null>(null)
+  const [shareToken, setShareToken] = useState<string | null>(null)
 
   useEffect(() => {
     if (params.id) {
-      loadTrip()
+      // Check for share token in URL
+      const token = searchParams?.get('token')
+      if (token) {
+        setShareToken(token)
+        validateShareToken(token)
+      } else {
+        loadTrip()
+      }
     }
-  }, [params.id])
+  }, [params.id, searchParams])
+
+  const validateShareToken = async (token: string) => {
+    try {
+      // Validate the share token
+      const { data: shareLinkData, error: shareError } = await supabase
+        .from('trip_share_links')
+        .select('trip_id')
+        .eq('share_token', token)
+        .single()
+
+      if (shareError || !shareLinkData) {
+        router.push('/dashboard')
+        return
+      }
+
+      // Token is valid, load the trip
+      await loadTrip()
+    } catch (error) {
+      console.error('Error validating share token:', error)
+      router.push('/dashboard')
+    }
+  }
 
   const loadTrip = async () => {
     try {
@@ -104,7 +135,7 @@ export default function TripPhotosPage() {
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-4">
               <Link
-                href={`/trips/${trip.id}`}
+                href={shareToken ? `/trips/${trip.id}?token=${shareToken}` : `/trips/${trip.id}`}
                 className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
                 aria-label="Back to trip"
               >

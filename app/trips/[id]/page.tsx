@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useParams, useRouter } from 'next/navigation'
-import { supabase, TripWithMembers, SavingsLog } from '@/lib/supabase'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import { supabase, TripWithMembers, SavingsLog, TripShareLink } from '@/lib/supabase'
 import { ProgressAvatar } from '@/components/ProgressAvatar'
 import { CountdownTimer } from '@/components/CountdownTimer'
 import { DarkModeToggle } from '@/components/DarkModeToggle'
@@ -11,18 +11,55 @@ import Link from 'next/link'
 export default function TripDetailPage() {
   const params = useParams()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [trip, setTrip] = useState<TripWithMembers | null>(null)
   const [loading, setLoading] = useState(true)
   const [isAdmin, setIsAdmin] = useState(false)
   const [savingsLogs, setSavingsLogs] = useState<SavingsLog[]>([])
   const [editingMember, setEditingMember] = useState<string | null>(null)
   const [editAmount, setEditAmount] = useState('')
+  const [shareLink, setShareLink] = useState<string | null>(null)
+  const [shareToken, setShareToken] = useState<string | null>(null)
+  const [showShareModal, setShowShareModal] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [isShareLinkAccess, setIsShareLinkAccess] = useState(false)
 
   useEffect(() => {
     if (params.id) {
-      loadTrip()
+      // Check for share token in URL
+      const token = searchParams?.get('token')
+      if (token) {
+        setShareToken(token)
+        setIsShareLinkAccess(true)
+        validateShareToken(token)
+      } else {
+        setIsShareLinkAccess(false)
+        loadTrip()
+      }
     }
-  }, [params.id])
+  }, [params.id, searchParams])
+
+  const validateShareToken = async (token: string) => {
+    try {
+      // Validate the share token
+      const { data: shareLinkData, error: shareError } = await supabase
+        .from('trip_share_links')
+        .select('trip_id')
+        .eq('share_token', token)
+        .single()
+
+      if (shareError || !shareLinkData) {
+        router.push('/dashboard')
+        return
+      }
+
+      // Token is valid, load the trip
+      await loadTrip()
+    } catch (error) {
+      console.error('Error validating share token:', error)
+      router.push('/dashboard')
+    }
+  }
 
   const loadTrip = async () => {
     try {
@@ -101,10 +138,83 @@ export default function TripDetailPage() {
       if (!logsError && logs) {
         setSavingsLogs(logs)
       }
+
+      // Load existing share link if admin
+      if (isAdmin) {
+        const { data: existingLink } = await supabase
+          .from('trip_share_links')
+          .select('share_token')
+          .eq('trip_id', params.id)
+          .limit(1)
+          .single()
+
+        if (existingLink) {
+          const baseUrl = window.location.origin
+          setShareLink(`${baseUrl}/trips/${params.id}?token=${existingLink.share_token}`)
+        }
+      }
     } catch (error) {
       console.error('Error loading trip:', error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const generateShareLink = async () => {
+    if (!trip || !isAdmin) return
+
+    try {
+      // Check if share link already exists
+      const { data: existingLink } = await supabase
+        .from('trip_share_links')
+        .select('share_token')
+        .eq('trip_id', trip.id)
+        .limit(1)
+        .single()
+
+      let token: string
+
+      if (existingLink) {
+        token = existingLink.share_token
+      } else {
+        // Generate a secure random token
+        token = crypto.randomUUID() + '-' + crypto.randomUUID()
+
+        // Get admin user
+        const { data: adminUser } = await supabase
+          .from('users')
+          .select('id')
+          .eq('role', 'admin')
+          .limit(1)
+          .single()
+
+        // Create new share link
+        const { error: insertError } = await supabase
+          .from('trip_share_links')
+          .insert({
+            trip_id: trip.id,
+            share_token: token,
+            created_by: adminUser?.id,
+          })
+
+        if (insertError) throw insertError
+      }
+
+      const baseUrl = window.location.origin
+      const link = `${baseUrl}/trips/${trip.id}?token=${token}`
+      setShareLink(link)
+      setShowShareModal(true)
+    } catch (error) {
+      console.error('Error generating share link:', error)
+      alert('Failed to generate share link')
+    }
+  }
+
+  const copyShareLink = () => {
+    if (shareLink) {
+      navigator.clipboard.writeText(shareLink)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
     }
   }
 
@@ -260,15 +370,17 @@ export default function TripDetailPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-4">
-              <Link
-                href="/dashboard"
-                className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
-                aria-label="Back to dashboard"
-              >
-                <svg className="w-5 h-5 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                </svg>
-              </Link>
+              {!isShareLinkAccess && (
+                <Link
+                  href="/dashboard"
+                  className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                  aria-label="Back to dashboard"
+                >
+                  <svg className="w-5 h-5 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                  </svg>
+                </Link>
+              )}
               <div>
                 <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
                   {trip.name}
@@ -281,16 +393,27 @@ export default function TripDetailPage() {
               </div>
             </div>
             <div className="flex items-center gap-3">
-              {isAdmin && (
-                <button
-                  onClick={exportToCSV}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-medium shadow-lg hover:shadow-xl transition-all duration-200 text-sm"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                  Export CSV
-                </button>
+              {isAdmin && !isShareLinkAccess && (
+                <>
+                  <button
+                    onClick={generateShareLink}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-xl font-medium shadow-lg hover:shadow-xl transition-all duration-200 text-sm"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                    </svg>
+                    Share Trip
+                  </button>
+                  <button
+                    onClick={exportToCSV}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-medium shadow-lg hover:shadow-xl transition-all duration-200 text-sm"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Export CSV
+                  </button>
+                </>
               )}
               <DarkModeToggle />
             </div>
@@ -305,7 +428,7 @@ export default function TripDetailPage() {
           (trip.location && trip.location.trim().length > 0)) && (
           <div className="fixed bottom-8 right-8 z-50 animate-fade-in">
             <Link
-              href={`/trips/${trip.id}/photos`}
+              href={shareToken ? `/trips/${trip.id}/photos?token=${shareToken}` : `/trips/${trip.id}/photos`}
               className="group relative flex items-center gap-3 px-5 py-4 bg-gradient-to-r from-sky-600 to-teal-600 hover:from-sky-700 hover:to-teal-700 text-white rounded-2xl shadow-2xl hover:shadow-3xl transition-all duration-300 hover:scale-105 backdrop-blur-sm border border-white/20"
               aria-label="View destination photos and details"
             >
@@ -436,7 +559,7 @@ export default function TripDetailPage() {
                   <th className="text-right py-4 px-4 text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
                     Progress
                   </th>
-                  {isAdmin && (
+                  {isAdmin && !isShareLinkAccess && (
                     <th className="text-center py-4 px-4 text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
                       Actions
                     </th>
@@ -550,7 +673,7 @@ export default function TripDetailPage() {
                           </span>
                         </div>
                       </td>
-                      {isAdmin && (
+                      {isAdmin && !isShareLinkAccess && (
                         <td className="text-center py-4 px-4">
                           {isEditing ? (
                             <div className="flex items-center justify-center gap-2">
@@ -586,7 +709,7 @@ export default function TripDetailPage() {
         </div>
 
         {/* Savings History (Admin only) */}
-        {isAdmin && savingsLogs.length > 0 && (
+        {isAdmin && !isShareLinkAccess && savingsLogs.length > 0 && (
           <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-travel-lg p-6 mt-8 border border-slate-200/50 dark:border-slate-700/50">
             <div className="mb-6">
               <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-1">
@@ -673,6 +796,69 @@ export default function TripDetailPage() {
           </div>
         )}
       </main>
+
+      {/* Share Link Modal */}
+      {showShareModal && shareLink && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+          onClick={() => setShowShareModal(false)}
+        >
+          <div
+            className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-bold text-slate-900 dark:text-slate-100">
+                Share Trip
+              </h3>
+              <button
+                onClick={() => setShowShareModal(false)}
+                className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
+              >
+                <svg className="w-5 h-5 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
+              Share this link to allow others to view this trip details and photos. The link works for both the trip page and the photos page.
+            </p>
+            <div className="flex items-center gap-2 mb-4">
+              <input
+                type="text"
+                value={shareLink}
+                readOnly
+                className="flex-1 px-4 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-xl text-slate-900 dark:text-slate-100 text-sm"
+              />
+              <button
+                onClick={copyShareLink}
+                className="px-4 py-2 bg-gradient-to-r from-sky-600 to-teal-600 hover:from-sky-700 hover:to-teal-700 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all duration-200 text-sm whitespace-nowrap"
+              >
+                {copied ? (
+                  <>
+                    <svg className="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    Copied!
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                    Copy
+                  </>
+                )}
+              </button>
+            </div>
+            <div className="bg-sky-50 dark:bg-sky-900/20 border border-sky-200 dark:border-sky-800 rounded-xl p-4">
+              <p className="text-xs text-slate-600 dark:text-slate-400">
+                <strong className="text-slate-900 dark:text-slate-100">Note:</strong> Anyone with this link can view the trip details and photos. Share responsibly.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

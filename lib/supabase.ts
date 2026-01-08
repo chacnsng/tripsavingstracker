@@ -63,3 +63,12 @@ export type TripWithMembers = Trip & {
   members: TripMemberWithUser[]
 }
 
+export type TripShareLink = {
+  id: string
+  trip_id: string
+  share_token: string
+  created_by?: string
+  created_at: string
+  updated_at: string
+}
+
