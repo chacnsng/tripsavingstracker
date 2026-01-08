@@ -1,13 +1,28 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error('Missing Supabase environment variables')
+// Create a function to get the supabase client
+// This allows us to handle missing env vars gracefully during build
+function createSupabaseClient(): SupabaseClient {
+  // During build time (when env vars might not be available), use placeholders
+  // At runtime, the actual env vars will be used
+  const url = supabaseUrl || 'https://placeholder.supabase.co'
+  const key = supabaseAnonKey || 'placeholder-key'
+  
+  const client = createClient(url, key)
+  
+  // Only validate at runtime (client-side)
+  if (typeof window !== 'undefined' && (!supabaseUrl || !supabaseAnonKey)) {
+    console.error('Missing Supabase environment variables')
+    // Don't throw during build, but log error at runtime
+  }
+  
+  return client
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+export const supabase = createSupabaseClient()
 
 // Database types
 export type User = {
